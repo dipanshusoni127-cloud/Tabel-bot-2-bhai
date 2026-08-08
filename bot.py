@@ -35,6 +35,11 @@ GROUP_ID = int(GROUP_ID) if GROUP_ID else None
 # Words that count as "I want to join this table"
 JOIN_WORDS = {"lga", "lgao", "l", "aao", "ll", "t", "aaja", "aja"}
 
+# Words used to report a win by replying to the confirmed table message
+WIN_WORDS = {"win", "won", "jeeta", "jeet", "jit", "w"}
+
+COMMISSION_PERCENT = 5
+
 # Pattern to detect a table-request message, e.g. "10k full +500 no iphone", "2k full",
 # "1k full no iphone", or plain stakes like "500 1000 1500 1200"
 def is_table_request(text: str) -> bool:
@@ -49,10 +54,45 @@ def is_table_request(text: str) -> bool:
 # In-memory store: {original_message_id: {"text":..., "poster": ..., "joiner": ..., "chat_id": ...}}
 pending_requests = {}
 
+# Tracks confirmed tables so we can detect win reports: {table_message_id: {...}}
+active_tables = {}
+
+# Tracks pending win reports awaiting admin confirmation: {report_key: {...}}
+pending_win_reports = {}
+
 
 def is_join_word(text: str) -> bool:
     cleaned = (text or "").strip().lower()
     return cleaned in JOIN_WORDS
+
+
+def is_win_word(text: str) -> bool:
+    cleaned = (text or "").strip().lower()
+    return cleaned in WIN_WORDS
+
+
+def extract_stake_amount(text: str) -> int:
+    """Best-effort extraction of the main stake amount from a table request text.
+    '5k full' -> 5000, '10k full +500 no iphone' -> 10000, '500 1000 1500 1200' -> 500
+    """
+    text = text or ""
+    k_match = re.search(r"(\d+)\s*k\b", text, re.IGNORECASE)
+    if k_match:
+        return int(k_match.group(1)) * 1000
+    num_match = re.search(r"\d+", text)
+    if num_match:
+        return int(num_match.group(0))
+    return 0
+
+
+def parse_amount(balance_str: str):
+    """Extract the first integer (with optional sign) from a balance string like '+900', '-250', '5000+4750'."""
+    if not balance_str or balance_str == "Not found":
+        return None
+    match = re.search(r"[-+]?\d+", balance_str)
+    if match:
+        return int(match.group(0))
+    return None
 
 
 def parse_balances(pinned_text: str) -> dict:
@@ -182,6 +222,73 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         pending_requests[orig_id]["joiner_display"] = joiner_display
 
         await context.bot.send_message(chat_id=ADMIN_ID, text=text_for_admin, reply_markup=keyboard)
+        return
+
+    # Case 3: someone replying to a CONFIRMED table message to report a win
+    if msg.reply_to_message and is_win_word(msg.text):
+        table_id = msg.reply_to_message.message_id
+        table = active_tables.get(table_id)
+        if not table:
+            return  # not a tracked confirmed table
+
+        reporter_id = msg.from_user.id
+        if reporter_id == table["poster_id"]:
+            winner, loser = "poster", "joiner"
+        elif reporter_id == table["joiner_id"]:
+            winner, loser = "joiner", "poster"
+        else:
+            return  # someone unrelated replied "win", ignore
+
+        winner_id = table[f"{winner}_id"]
+        winner_display = table[f"{winner}_display"]
+        winner_name = table[f"{winner}_name"]
+        winner_username = table[f"{winner}_username"]
+
+        loser_display = table[f"{loser}_display"]
+        loser_name = table[f"{loser}_name"]
+        loser_username = table[f"{loser}_username"]
+
+        stake = extract_stake_amount(table["stake_text"])
+        commission = round(stake * COMMISSION_PERCENT / 100)
+        winner_gain = stake - commission
+
+        balances = await get_pinned_balances(context, chat_id)
+        winner_bal_str = lookup_balance(balances, winner_name, winner_username)
+        loser_bal_str = lookup_balance(balances, loser_name, loser_username)
+        winner_bal = parse_amount(winner_bal_str)
+        loser_bal = parse_amount(loser_bal_str)
+
+        winner_new = (winner_bal + winner_gain) if winner_bal is not None else None
+        loser_new = (loser_bal - stake) if loser_bal is not None else None
+
+        report_key = f"{table_id}:{msg.message_id}"
+        pending_win_reports[report_key] = {
+            "table_id": table_id,
+            "winner_display": winner_display,
+            "loser_display": loser_display,
+        }
+
+        winner_line = f"{winner_bal_str} → {winner_new}" if winner_new is not None else f"{winner_bal_str} (manual check needed)"
+        loser_line = f"{loser_bal_str} → {loser_new}" if loser_new is not None else f"{loser_bal_str} (manual check needed)"
+
+        text_for_admin = (
+            "🏆 Win Reported\n\n"
+            f"Table: {table['stake_text']}\n"
+            f"Winner: {winner_display}\n"
+            f"Loser: {loser_display}\n"
+            f"Stake: {stake} | Commission ({COMMISSION_PERCENT}%): {commission}\n\n"
+            f"Winner balance: {winner_line}\n"
+            f"Loser balance: {loser_line}\n\n"
+            "Confirm karoge toh ye amounts chart mein manually update kar dena."
+        )
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data=f"winconfirm:{report_key}"),
+                InlineKeyboardButton("❌ Reject", callback_data=f"winreject:{report_key}"),
+            ]
+        ])
+        await context.bot.send_message(chat_id=ADMIN_ID, text=text_for_admin, reply_markup=keyboard)
+        return
 
 
 async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -193,6 +300,22 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     action, callback_key = query.data.split(":", 1)
+
+    if action in ("winconfirm", "winreject"):
+        report = pending_win_reports.get(callback_key)
+        if not report:
+            await query.edit_message_text("Ye win report ab valid nahi hai (expired ya already handled).")
+            return
+        if action == "winreject":
+            await query.edit_message_text(f"❌ Win report rejected:\n{report['winner_display']} vs {report['loser_display']}")
+        else:
+            await query.edit_message_text(
+                f"✅ Confirmed. Ab chart mein manually update kar do:\n"
+                f"{report['winner_display']} vs {report['loser_display']}"
+            )
+        pending_win_reports.pop(callback_key, None)
+        return
+
     orig_id_str, _reply_id_str = callback_key.split(":")
     orig_id = int(orig_id_str)
 
@@ -214,7 +337,21 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         "🆚\n"
         f"{request['joiner_display']}"
     )
-    await context.bot.send_message(chat_id=request["chat_id"], text=table_text)
+    sent_msg = await context.bot.send_message(chat_id=request["chat_id"], text=table_text)
+
+    active_tables[sent_msg.message_id] = {
+        "stake_text": request["text"],
+        "chat_id": request["chat_id"],
+        "poster_id": request["poster_id"],
+        "poster_name": request["poster_name"],
+        "poster_username": request["poster_username"],
+        "poster_display": request["poster_display"],
+        "joiner_id": request["joiner_id"],
+        "joiner_name": request["joiner_name"],
+        "joiner_username": request["joiner_username"],
+        "joiner_display": request["joiner_display"],
+    }
+
     await query.edit_message_text(f"✅ Confirmed & posted:\n{request['text']}")
     pending_requests.pop(orig_id, None)
 
