@@ -49,9 +49,6 @@ def is_table_request(text: str) -> bool:
 # In-memory store: {original_message_id: {"text":..., "poster": ..., "joiner": ..., "chat_id": ...}}
 pending_requests = {}
 
-# Matches lines like: "Aman Raj = -250", "Bhaisab  =  850", "Devil = 2000"
-BALANCE_LINE_PATTERN = re.compile(r"^([A-Za-z][A-Za-z\s]*?)\s*=\s*(-?\d+)\s*$")
-
 
 def is_join_word(text: str) -> bool:
     cleaned = (text or "").strip().lower()
@@ -59,16 +56,30 @@ def is_join_word(text: str) -> bool:
 
 
 def parse_balances(pinned_text: str) -> dict:
-    """Parse the pinned message into {name_lowercase: balance}."""
+    """Parse the pinned message into {name_lowercase: balance_string}.
+    Handles lines like:
+      ❤️ Aman Raj = -250
+      ❤️ Bhaisab  =  850
+      ❤️ @Soni_fx  = 9000
+      ❤️ sanju  = +6650
+      ❤️ Prince 🔥 = 7000 +1425
+    Any line containing '=' is treated as a balance line; everything before
+    '=' (minus leading emoji/symbols) is the name, everything after is the balance.
+    """
     balances = {}
     for raw_line in (pinned_text or "").splitlines():
-        # Strip any leading non-letter characters (emoji, dice symbols, bullets, spaces)
-        line = re.sub(r"^[^A-Za-z]+", "", raw_line.strip())
-        match = BALANCE_LINE_PATTERN.match(line)
-        if match:
-            name = match.group(1).strip().lower()
-            balance = int(match.group(2))
-            balances[name] = balance
+        if "=" not in raw_line:
+            continue
+        left, right = raw_line.split("=", 1)
+        # Strip leading emoji/symbols but keep letters, digits, @, and apostrophes
+        name = re.sub(r"^[^A-Za-z@]+", "", left).strip()
+        name = re.sub(r"\s+", " ", name)
+        balance = right.strip()
+        if not name or not balance:
+            continue
+        balances[name.lower()] = balance
+        if name.startswith("@"):
+            balances[name[1:].lower()] = balance
     logger.info(f"Parsed {len(balances)} balance entries from pinned message: {list(balances.items())[:5]}")
     return balances
 
