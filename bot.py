@@ -35,8 +35,15 @@ GROUP_ID = int(GROUP_ID) if GROUP_ID else None
 # Words that count as "I want to join this table"
 JOIN_WORDS = {"lga", "lgao", "l", "aao", "ll", "t", "aaja", "aja"}
 
-# Pattern to detect a table-request message, e.g. "10k full +500 no iphone", "2k full", "1k full no iphone"
-TABLE_PATTERN = re.compile(r"\b\d+k\b.*\bfull\b", re.IGNORECASE)
+# Pattern to detect a table-request message, e.g. "10k full +500 no iphone", "2k full",
+# "1k full no iphone", or plain stakes like "500 1000 1500 1200"
+def is_table_request(text: str) -> bool:
+    text = text or ""
+    if re.search(r"\bfull\b", text, re.IGNORECASE):
+        return True
+    # Multiple standalone amounts (e.g. "500 1000 1500 1200") also count as a table request
+    numbers = re.findall(r"\b\d{2,}k?\b", text, re.IGNORECASE)
+    return len(numbers) >= 2
 # ================================================
 
 # In-memory store: {original_message_id: {"text":..., "poster": ..., "joiner": ..., "chat_id": ...}}
@@ -44,10 +51,6 @@ pending_requests = {}
 
 # Matches lines like: "Aman Raj = -250", "Bhaisab  =  850", "Devil = 2000"
 BALANCE_LINE_PATTERN = re.compile(r"^([A-Za-z][A-Za-z\s]*?)\s*=\s*(-?\d+)\s*$")
-
-
-def is_table_request(text: str) -> bool:
-    return bool(TABLE_PATTERN.search(text or ""))
 
 
 def is_join_word(text: str) -> bool:
@@ -194,8 +197,8 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # action == confirm
     table_text = (
-        "2 BHAI LUDO KING\n"
         f"{request['text']}\n"
+        "\n"
         f"{request['poster_display']}\n"
         "🆚\n"
         f"{request['joiner_display']}"
