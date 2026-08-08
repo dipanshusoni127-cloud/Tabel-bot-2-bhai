@@ -58,12 +58,15 @@ def is_join_word(text: str) -> bool:
 def parse_balances(pinned_text: str) -> dict:
     """Parse the pinned message into {name_lowercase: balance}."""
     balances = {}
-    for line in (pinned_text or "").splitlines():
-        match = BALANCE_LINE_PATTERN.match(line.strip().lstrip("❤️").strip())
+    for raw_line in (pinned_text or "").splitlines():
+        # Strip any leading non-letter characters (emoji, dice symbols, bullets, spaces)
+        line = re.sub(r"^[^A-Za-z]+", "", raw_line.strip())
+        match = BALANCE_LINE_PATTERN.match(line)
         if match:
             name = match.group(1).strip().lower()
             balance = int(match.group(2))
             balances[name] = balance
+    logger.info(f"Parsed {len(balances)} balance entries from pinned message: {list(balances.items())[:5]}")
     return balances
 
 
@@ -93,7 +96,10 @@ async def get_pinned_balances(context: ContextTypes.DEFAULT_TYPE, chat_id: int) 
         chat = await context.bot.get_chat(chat_id)
         pinned = chat.pinned_message
         if pinned and pinned.text:
+            logger.info(f"Pinned message raw text (first 300 chars): {pinned.text[:300]}")
             return parse_balances(pinned.text)
+        else:
+            logger.warning("No pinned message found, or pinned message has no text.")
     except Exception as e:
         logger.warning(f"Could not fetch pinned message: {e}")
     return {}
@@ -188,9 +194,11 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # action == confirm
     table_text = (
-        "✅ TABLE CONFIRMED\n"
-        f"{request['poster_display']} 🆚 {request['joiner_display']}\n"
-        f"{request['text']}"
+        "2 BHAI LUDO KING\n"
+        f"{request['text']}\n"
+        f"{request['poster_display']}\n"
+        "🆚\n"
+        f"{request['joiner_display']}"
     )
     await context.bot.send_message(chat_id=request["chat_id"], text=table_text)
     await query.edit_message_text(f"✅ Confirmed & posted:\n{request['text']}")
