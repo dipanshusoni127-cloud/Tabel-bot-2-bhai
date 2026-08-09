@@ -621,24 +621,27 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         if action == "winreject":
             await query.edit_message_text(f"❌ Win report rejected:\n{report['winner_display']} vs {report['loser_display']}")
-        elif report.get("auto_mode") and report.get("winner_key") and report.get("loser_key"):
-            bot_chart["balances"][report["winner_key"]] = report["winner_new"]
-            bot_chart["balances"][report["loser_key"]] = report["loser_new"]
-            await refresh_chart_message(context)
+        else:
+            if report.get("auto_mode") and report.get("winner_key") and report.get("loser_key"):
+                bot_chart["balances"][report["winner_key"]] = report["winner_new"]
+                bot_chart["balances"][report["loser_key"]] = report["loser_new"]
+                await refresh_chart_message(context)
+                admin_confirmation = (
+                    f"✅ Confirmed. Chart automatically update ho gaya:\n"
+                    f"{report['winner_display']}: {report['winner_new']}\n"
+                    f"{report['loser_display']}: {report['loser_new']}"
+                )
+            else:
+                admin_confirmation = (
+                    f"✅ Confirmed. Ab chart mein manually update kar do:\n"
+                    f"{report['winner_display']} vs {report['loser_display']}"
+                )
+
             await context.bot.send_message(
                 chat_id=report["chat_id"],
                 text=f"🏆 {report['winner_display']} WON! Balance updated ✅"
             )
-            await query.edit_message_text(
-                f"✅ Confirmed. Chart automatically update ho gaya:\n"
-                f"{report['winner_display']}: {report['winner_new']}\n"
-                f"{report['loser_display']}: {report['loser_new']}"
-            )
-        else:
-            await query.edit_message_text(
-                f"✅ Confirmed. Ab chart mein manually update kar do:\n"
-                f"{report['winner_display']} vs {report['loser_display']}"
-            )
+            await query.edit_message_text(admin_confirmation)
         pending_win_reports.pop(callback_key, None)
         return
 
