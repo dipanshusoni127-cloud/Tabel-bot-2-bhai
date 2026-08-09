@@ -40,15 +40,14 @@ WIN_WORDS = {"win", "won", "jeeta", "jeet", "jit", "w"}
 
 COMMISSION_PERCENT = 5
 
-# Pattern to detect a table-request message, e.g. "10k full +500 no iphone", "2k full",
-# "1k full no iphone", or plain stakes like "500 1000 1500 1200"
+# Pattern to detect a table-request message: a number (e.g. 2k, 1k, 500, 700)
+# followed by the word "full" or "ludo", e.g. "2k full", "5k ludo", "500 full", "10k full +500 no iphone"
+TABLE_REQUEST_PATTERN = re.compile(r"\d+\s*k?\s*(full|ludo)", re.IGNORECASE)
+
+
 def is_table_request(text: str) -> bool:
     text = text or ""
-    if re.search(r"\bfull\b", text, re.IGNORECASE):
-        return True
-    # Multiple standalone amounts (e.g. "500 1000 1500 1200") also count as a table request
-    numbers = re.findall(r"\b\d{2,}k?\b", text, re.IGNORECASE)
-    return len(numbers) >= 2
+    return bool(TABLE_REQUEST_PATTERN.search(text))
 # ================================================
 
 # In-memory store: {original_message_id: {"text":..., "poster": ..., "joiner": ..., "chat_id": ...}}
