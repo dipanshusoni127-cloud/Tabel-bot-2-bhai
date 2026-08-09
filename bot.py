@@ -41,8 +41,8 @@ WIN_WORDS = {"win", "won", "jeeta", "jeet", "jit", "w"}
 COMMISSION_PERCENT = 5
 
 # Pattern to detect a table-request message: a number (e.g. 2k, 1k, 500, 700)
-# followed by the word "full" or "ludo", e.g. "2k full", "5k ludo", "500 full", "10k full +500 no iphone"
-TABLE_REQUEST_PATTERN = re.compile(r"\d+\s*k?\s*(full|ludo)", re.IGNORECASE)
+# followed by the word "full"/"ful" (typo-tolerant) or "ludo", e.g. "2k full", "1k ful", "5k ludo"
+TABLE_REQUEST_PATTERN = re.compile(r"\d+\s*k?\s*(fu?ll?|ludo)", re.IGNORECASE)
 
 
 def is_table_request(text: str) -> bool:
