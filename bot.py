@@ -202,6 +202,61 @@ async def cmd_removebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_chart["display"].pop(key, None)
     await refresh_chart_message(context)
     await update.message.reply_text(f"✅ '{name}' chart se remove kar diya.")
+
+
+async def cmd_addtable(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "Manually poste ki hui table wale message ko REPLY karke ye command bhejo:\n"
+            "/addtable @poster @joiner 5k full"
+        )
+        return
+
+    tokens = update.message.text.split()[1:]  # skip "/addtable"
+    if len(tokens) < 3:
+        await update.message.reply_text("Format: /addtable @poster @joiner 5k full")
+        return
+
+    poster_username = tokens[0].lstrip("@")
+    joiner_username = tokens[1].lstrip("@")
+    stake_text = " ".join(tokens[2:])
+
+    try:
+        poster_chat = await context.bot.get_chat(f"@{poster_username}")
+        joiner_chat = await context.bot.get_chat(f"@{joiner_username}")
+    except Exception as e:
+        await update.message.reply_text(f"Username resolve nahi hua: {e}\nUsername sahi hai check kar lo.")
+        return
+
+    chat_id = update.effective_chat.id
+    table_msg_id = update.message.reply_to_message.message_id
+
+    active_tables[table_msg_id] = {
+        "stake_text": stake_text,
+        "chat_id": chat_id,
+        "poster_id": poster_chat.id,
+        "poster_name": poster_chat.first_name,
+        "poster_username": poster_chat.username,
+        "poster_display": f"@{poster_chat.username}" if poster_chat.username else poster_chat.first_name,
+        "joiner_id": joiner_chat.id,
+        "joiner_name": joiner_chat.first_name,
+        "joiner_username": joiner_chat.username,
+        "joiner_display": f"@{joiner_chat.username}" if joiner_chat.username else joiner_chat.first_name,
+    }
+    await update.message.reply_text("✅ Table register ho gayi. Ab is message pe 'win' reply karega tab tracking chalegi.")
+
+
+REGISTER_WORDS = {"register", "reg"}
+
+
+def is_register_word(text: str) -> bool:
+    cleaned = (text or "").strip().lower()
+    return cleaned in REGISTER_WORDS
+
+
+def is_join_word(text: str) -> bool:
     cleaned = (text or "").strip().lower()
     return cleaned in JOIN_WORDS
 
@@ -321,6 +376,43 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     chat_id = update.effective_chat.id
     if GROUP_ID is not None and chat_id != GROUP_ID:
+        return
+
+    # Case 0: admin replies "register" to a manually-posted table message —
+    # bot auto-extracts poster/joiner from @mentions in that message
+    if msg.reply_to_message and is_register_word(msg.text) and msg.from_user.id == ADMIN_ID:
+        source = msg.reply_to_message
+        source_text = source.text or ""
+        usernames = re.findall(r"@(\w+)", source_text)
+        if len(usernames) < 2:
+            await context.bot.send_message(chat_id=ADMIN_ID, text="Us message mein 2 @username nahi mile, register nahi kar saka.")
+            return
+
+        poster_username, joiner_username = usernames[0], usernames[1]
+        stake_text = re.sub(r"@\w+", "", source_text).strip()
+        if not stake_text:
+            stake_text = source_text.strip()
+
+        try:
+            poster_chat = await context.bot.get_chat(f"@{poster_username}")
+            joiner_chat = await context.bot.get_chat(f"@{joiner_username}")
+        except Exception as e:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=f"Username resolve nahi hua: {e}")
+            return
+
+        active_tables[source.message_id] = {
+            "stake_text": stake_text,
+            "chat_id": chat_id,
+            "poster_id": poster_chat.id,
+            "poster_name": poster_chat.first_name,
+            "poster_username": poster_chat.username,
+            "poster_display": f"@{poster_chat.username}" if poster_chat.username else poster_chat.first_name,
+            "joiner_id": joiner_chat.id,
+            "joiner_name": joiner_chat.first_name,
+            "joiner_username": joiner_chat.username,
+            "joiner_display": f"@{joiner_chat.username}" if joiner_chat.username else joiner_chat.first_name,
+        }
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"✅ Table register ho gayi:\n{stake_text}\n@{poster_username} 🆚 @{joiner_username}")
         return
 
     # Case 1: someone posting a table request like "10k full +500 no iphone"
@@ -572,6 +664,7 @@ def main():
     app.add_handler(CommandHandler("initchart", cmd_initchart))
     app.add_handler(CommandHandler("setbalance", cmd_setbalance))
     app.add_handler(CommandHandler("removebalance", cmd_removebalance))
+    app.add_handler(CommandHandler("addtable", cmd_addtable))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message))
     app.add_handler(CallbackQueryHandler(handle_admin_button))
 
