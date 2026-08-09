@@ -185,7 +185,23 @@ active_tables = {}
 pending_win_reports = {}
 
 
-def is_join_word(text: str) -> bool:
+async def cmd_removebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    name = update.message.text.replace("/removebalance", "", 1).strip()
+    if not name:
+        await update.message.reply_text("Format: /removebalance Naam  (e.g. /removebalance Aman Raj)")
+        return
+
+    key = name.lower()
+    if key not in bot_chart["balances"]:
+        await update.message.reply_text(f"'{name}' chart mein mila nahi.")
+        return
+
+    del bot_chart["balances"][key]
+    bot_chart["display"].pop(key, None)
+    await refresh_chart_message(context)
+    await update.message.reply_text(f"✅ '{name}' chart se remove kar diya.")
     cleaned = (text or "").strip().lower()
     return cleaned in JOIN_WORDS
 
@@ -555,6 +571,7 @@ def main():
     app.add_handler(MessageHandler(filters.ALL, debug_log_all), group=-1)
     app.add_handler(CommandHandler("initchart", cmd_initchart))
     app.add_handler(CommandHandler("setbalance", cmd_setbalance))
+    app.add_handler(CommandHandler("removebalance", cmd_removebalance))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message))
     app.add_handler(CallbackQueryHandler(handle_admin_button))
 
