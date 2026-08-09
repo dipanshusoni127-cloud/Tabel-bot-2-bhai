@@ -256,6 +256,12 @@ def is_register_word(text: str) -> bool:
     return cleaned in REGISTER_WORDS
 
 
+def mention_html(user_id: int, display_name: str) -> str:
+    """Build a clickable ID-based mention that works even if the user has no @username."""
+    safe_name = (display_name or "player").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f'<a href="tg://user?id={user_id}">{safe_name}</a>'
+
+
 def is_join_word(text: str) -> bool:
     cleaned = (text or "").strip().lower()
     return cleaned in JOIN_WORDS
@@ -379,40 +385,65 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # Case 0: admin replies "register" to a manually-posted table message —
-    # bot auto-extracts poster/joiner from @mentions in that message
+    # bot auto-extracts poster/joiner from tagged mentions in that message
     if msg.reply_to_message and is_register_word(msg.text) and msg.from_user.id == ADMIN_ID:
         source = msg.reply_to_message
         source_text = source.text or ""
-        usernames = re.findall(r"@(\w+)", source_text)
-        if len(usernames) < 2:
-            await context.bot.send_message(chat_id=ADMIN_ID, text="Us message mein 2 @username nahi mile, register nahi kar saka.")
+
+        mentioned = []  # list of (id_or_None, username_or_None, first_name_or_None)
+        for entity in (source.entities or []):
+            if entity.type == "text_mention" and entity.user:
+                mentioned.append((entity.user.id, entity.user.username, entity.user.first_name))
+            elif entity.type == "mention":
+                uname = source_text[entity.offset + 1: entity.offset + entity.length]
+                mentioned.append((None, uname, None))
+
+        if len(mentioned) < 2:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "Us message mein 2 tagged players nahi mile (bina @ ke plain naam bot resolve nahi kar sakta).\n"
+                    "Iske bajaye ye command use karo (dono ka @username pata hona chahiye):\n"
+                    "/addtable @poster @joiner 5k full"
+                )
+            )
             return
 
-        poster_username, joiner_username = usernames[0], usernames[1]
-        stake_text = re.sub(r"@\w+", "", source_text).strip()
-        if not stake_text:
-            stake_text = source_text.strip()
+        resolved = []
+        for uid, uname, fname in mentioned[:2]:
+            if uid is not None:
+                resolved.append((uid, uname, fname))
+            else:
+                try:
+                    chat = await context.bot.get_chat(f"@{uname}")
+                    resolved.append((chat.id, chat.username, chat.first_name))
+                except Exception as e:
+                    await context.bot.send_message(chat_id=ADMIN_ID, text=f"@{uname} resolve nahi hua: {e}")
+                    return
 
-        try:
-            poster_chat = await context.bot.get_chat(f"@{poster_username}")
-            joiner_chat = await context.bot.get_chat(f"@{joiner_username}")
-        except Exception as e:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=f"Username resolve nahi hua: {e}")
-            return
+        (poster_id, poster_username, poster_fname), (joiner_id, joiner_username, joiner_fname) = resolved
+        poster_display = f"@{poster_username}" if poster_username else poster_fname
+        joiner_display = f"@{joiner_username}" if joiner_username else joiner_fname
+
+        stake_text = source_text
+        for entity in sorted((source.entities or []), key=lambda e: -e.offset):
+            if entity.type in ("mention", "text_mention"):
+                stake_text = stake_text[:entity.offset] + stake_text[entity.offset + entity.length:]
+        stake_text = stake_text.strip() or source_text.strip()
 
         active_tables[source.message_id] = {
             "stake_text": stake_text,
             "chat_id": chat_id,
-            "poster_id": poster_chat.id,
-            "poster_name": poster_chat.first_name,
-            "poster_username": poster_chat.username,
-            "poster_display": f"@{poster_chat.username}" if poster_chat.username else poster_chat.first_name,
-            "joiner_id": joiner_chat.id,
-            "joiner_name": joiner_chat.first_name,
-            "joiner_username": joiner_chat.username,
-            "joiner_display": f"@{joiner_chat.username}" if joiner_chat.username else joiner_chat.first_name,
+            "poster_id": poster_id,
+            "poster_name": poster_fname,
+            "poster_username": poster_username,
+            "poster_display": poster_display,
+            "joiner_id": joiner_id,
+            "joiner_name": joiner_fname,
+            "joiner_username": joiner_username,
+            "joiner_display": joiner_display,
         }
-        await context.bot.send_message(chat_id=ADMIN_ID, text=f"✅ Table register ho gayi:\n{stake_text}\n@{poster_username} 🆚 @{joiner_username}")
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"✅ Table register ho gayi:\n{stake_text}\n{poster_display} 🆚 {joiner_display}")
         return
 
     # Case 1: someone posting a table request like "10k full +500 no iphone"
@@ -625,14 +656,16 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # action == confirm
+    poster_mention = mention_html(request["poster_id"], request["poster_display"].lstrip("@"))
+    joiner_mention = mention_html(request["joiner_id"], request["joiner_display"].lstrip("@"))
     table_text = (
         f"{normalize_table_text(request['text'])}\n"
         "\n"
-        f"{request['poster_display']}\n"
+        f"{poster_mention}\n"
         "🆚\n"
-        f"{request['joiner_display']}"
+        f"{joiner_mention}"
     )
-    sent_msg = await context.bot.send_message(chat_id=request["chat_id"], text=table_text)
+    sent_msg = await context.bot.send_message(chat_id=request["chat_id"], text=table_text, parse_mode="HTML")
 
     active_tables[sent_msg.message_id] = {
         "stake_text": request["text"],
