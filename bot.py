@@ -432,6 +432,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         report_key = f"{table_id}:{msg.message_id}"
         pending_win_reports[report_key] = {
             "table_id": table_id,
+            "chat_id": table["chat_id"],
             "winner_display": winner_display,
             "loser_display": loser_display,
             "auto_mode": auto_mode,
@@ -485,6 +486,10 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
             bot_chart["balances"][report["winner_key"]] = report["winner_new"]
             bot_chart["balances"][report["loser_key"]] = report["loser_new"]
             await refresh_chart_message(context)
+            await context.bot.send_message(
+                chat_id=report["chat_id"],
+                text=f"🏆 {report['winner_display']} WON! Balance updated ✅"
+            )
             await query.edit_message_text(
                 f"✅ Confirmed. Chart automatically update ho gaya:\n"
                 f"{report['winner_display']}: {report['winner_new']}\n"
