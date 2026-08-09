@@ -193,12 +193,30 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         }
         return
 
-    # Case 2: someone replying to a table request with a join word
-    if msg.reply_to_message and is_join_word(msg.text):
-        orig_id = msg.reply_to_message.message_id
+    # Case 2: someone joining a table — either by replying to it, or by sending
+    # a plain join-word message (bot matches it to the latest unclaimed table request)
+    if is_join_word(msg.text):
+        orig_id = None
+        if msg.reply_to_message:
+            orig_id = msg.reply_to_message.message_id
+            if orig_id not in pending_requests:
+                orig_id = None
+        if orig_id is None:
+            # No reply, or reply wasn't a tracked table — fall back to the latest
+            # unclaimed table request in this chat
+            candidates = [
+                mid for mid, req in pending_requests.items()
+                if req["chat_id"] == chat_id and "joiner_id" not in req
+            ]
+            if candidates:
+                orig_id = max(candidates)
+
+        if orig_id is None:
+            return  # no table request to join
+
         request = pending_requests.get(orig_id)
-        if not request:
-            return  # not a tracked table request
+        if not request or "joiner_id" in request:
+            return  # not a tracked table request, or already joined
 
         joiner_id = msg.from_user.id
         joiner_name = msg.from_user.first_name
