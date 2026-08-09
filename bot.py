@@ -391,11 +391,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         source_text = source.text or ""
 
         mentioned = []  # list of (id_or_None, username_or_None, first_name_or_None)
-        for entity in (source.entities or []):
+        parsed_entities = source.parse_entities(types=["text_mention", "mention"])
+        for entity, text in parsed_entities.items():
             if entity.type == "text_mention" and entity.user:
                 mentioned.append((entity.user.id, entity.user.username, entity.user.first_name))
             elif entity.type == "mention":
-                uname = source_text[entity.offset + 1: entity.offset + entity.length]
+                uname = text.lstrip("@")
                 mentioned.append((None, uname, None))
 
         if len(mentioned) < 2:
@@ -426,10 +427,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         joiner_display = f"@{joiner_username}" if joiner_username else joiner_fname
 
         stake_text = source_text
-        for entity in sorted((source.entities or []), key=lambda e: -e.offset):
-            if entity.type in ("mention", "text_mention"):
-                stake_text = stake_text[:entity.offset] + stake_text[entity.offset + entity.length:]
-        stake_text = stake_text.strip() or source_text.strip()
+        for entity, text in parsed_entities.items():
+            stake_text = stake_text.replace(text, "")
+        stake_text = re.sub(r"\s+", " ", stake_text).strip() or source_text.strip()
 
         active_tables[source.message_id] = {
             "stake_text": stake_text,
