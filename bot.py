@@ -67,7 +67,10 @@ def is_join_word(text: str) -> bool:
 
 def is_win_word(text: str) -> bool:
     cleaned = (text or "").strip().lower()
-    return cleaned in WIN_WORDS
+    if cleaned in WIN_WORDS:
+        return True
+    # Catch typo/variant forms like "w", "ww", "www", "winn", "wiin"
+    return bool(re.fullmatch(r"w+i?n*", cleaned))
 
 
 def extract_stake_amount(text: str) -> int:
