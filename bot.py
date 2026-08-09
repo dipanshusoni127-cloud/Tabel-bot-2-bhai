@@ -18,6 +18,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     MessageHandler,
+    CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
     filters,
@@ -39,6 +40,120 @@ JOIN_WORDS = {"lga", "lgao", "l", "aao", "ll", "t", "aaja", "aja"}
 WIN_WORDS = {"win", "won", "jeeta", "jeet", "jit", "w", "ww", "www", "wwww", "wwwww", "winn", "winnn"}
 
 COMMISSION_PERCENT = 5
+
+# Bot's own auto-updating balance chart (populated via /initchart)
+bot_chart = {"chat_id": None, "message_id": None, "balances": {}, "display": {}}
+
+
+def parse_balance_lines(text: str):
+    """Parse lines like '❤️ Aman Raj = -250' into [(name, balance_str), ...], preserving name case."""
+    entries = []
+    for raw_line in (text or "").splitlines():
+        if "=" not in raw_line:
+            continue
+        left, right = raw_line.split("=", 1)
+        name = re.sub(r"^[^A-Za-z@]+", "", left).strip()
+        name = re.sub(r"\s+", " ", name)
+        balance = right.strip()
+        if not name or not balance:
+            continue
+        entries.append((name, balance))
+    return entries
+
+
+def format_chart_text() -> str:
+    lines = ["💰 BALANCE CHART (auto-updated)", ""]
+    for key in sorted(bot_chart["balances"].keys()):
+        disp = bot_chart["display"].get(key, key.title())
+        val = bot_chart["balances"][key]
+        lines.append(f"{disp} = {val}")
+    return "\n".join(lines)
+
+
+def find_balance_key(first_name: str, username: str):
+    """Find the matching key in bot_chart['balances'] for this player, or None."""
+    candidates = []
+    if first_name:
+        candidates.append(first_name.strip().lower())
+    if username:
+        candidates.append(username.strip().lower())
+    for c in candidates:
+        if c in bot_chart["balances"]:
+            return c
+    for c in candidates:
+        for key in bot_chart["balances"]:
+            if c and (c in key or key in c):
+                return key
+    return None
+
+
+async def refresh_chart_message(context: ContextTypes.DEFAULT_TYPE):
+    if bot_chart["message_id"] is None or bot_chart["chat_id"] is None:
+        return
+    try:
+        await context.bot.edit_message_text(
+            chat_id=bot_chart["chat_id"],
+            message_id=bot_chart["message_id"],
+            text=format_chart_text(),
+        )
+    except Exception as e:
+        logger.warning(f"Could not edit chart message: {e}")
+
+
+async def cmd_initchart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    chat_id = update.effective_chat.id
+    source_text = None
+    if update.message.reply_to_message and update.message.reply_to_message.text:
+        source_text = update.message.reply_to_message.text
+    else:
+        source_text = update.message.text.replace("/initchart", "", 1).strip()
+
+    entries = parse_balance_lines(source_text)
+    if not entries:
+        await update.message.reply_text("Koi balance lines nahi mili. /initchart ke baad chart paste karo, ya chart wale message ko reply karke /initchart bhejo.")
+        return
+
+    bot_chart["balances"] = {}
+    bot_chart["display"] = {}
+    for name, bal_str in entries:
+        key = name.lstrip("@").lower()
+        val = parse_amount(bal_str) or 0
+        bot_chart["balances"][key] = val
+        bot_chart["display"][key] = name.lstrip("@")
+
+    sent = await context.bot.send_message(chat_id=chat_id, text=format_chart_text())
+    try:
+        await context.bot.pin_chat_message(chat_id=chat_id, message_id=sent.message_id)
+    except Exception as e:
+        logger.warning(f"Could not pin chart message: {e}")
+
+    bot_chart["chat_id"] = chat_id
+    bot_chart["message_id"] = sent.message_id
+    await update.message.reply_text(f"✅ Chart initialized with {len(bot_chart['balances'])} players. Ab automatic update chalu hai.")
+
+
+async def cmd_setbalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    parts = update.message.text.split()
+    if len(parts) < 3:
+        await update.message.reply_text("Format: /setbalance Naam amount  (e.g. /setbalance Aman Raj -250)")
+        return
+    amount_str = parts[-1]
+    name = " ".join(parts[1:-1])
+    try:
+        amount = int(amount_str)
+    except ValueError:
+        await update.message.reply_text("Amount ek number hona chahiye (e.g. -250, 900).")
+        return
+
+    key = name.lower()
+    bot_chart["balances"][key] = amount
+    bot_chart["display"][key] = name
+    await refresh_chart_message(context)
+    await update.message.reply_text(f"✅ {name} ka balance {amount} set kar diya, chart update ho gaya.")
 
 # Pattern to detect a table-request message: a number (e.g. 2k, 1k, 500, 700)
 # followed by the word "full"/"ful" (typo-tolerant) or "ludo", e.g. "2k full", "1k ful", "5k ludo"
@@ -284,11 +399,22 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         commission = round(stake * COMMISSION_PERCENT / 100)
         winner_gain = stake - commission
 
-        balances = await get_pinned_balances(context, chat_id)
-        winner_bal_str = lookup_balance(balances, winner_name, winner_username)
-        loser_bal_str = lookup_balance(balances, loser_name, loser_username)
-        winner_bal = parse_amount(winner_bal_str)
-        loser_bal = parse_amount(loser_bal_str)
+        auto_mode = bot_chart["chat_id"] == chat_id and bool(bot_chart["balances"])
+        winner_key = loser_key = None
+
+        if auto_mode:
+            winner_key = find_balance_key(winner_name, winner_username)
+            loser_key = find_balance_key(loser_name, loser_username)
+            winner_bal = bot_chart["balances"].get(winner_key) if winner_key else None
+            loser_bal = bot_chart["balances"].get(loser_key) if loser_key else None
+            winner_bal_str = str(winner_bal) if winner_bal is not None else "Not found"
+            loser_bal_str = str(loser_bal) if loser_bal is not None else "Not found"
+        else:
+            balances = await get_pinned_balances(context, chat_id)
+            winner_bal_str = lookup_balance(balances, winner_name, winner_username)
+            loser_bal_str = lookup_balance(balances, loser_name, loser_username)
+            winner_bal = parse_amount(winner_bal_str)
+            loser_bal = parse_amount(loser_bal_str)
 
         winner_new = (winner_bal + winner_gain) if winner_bal is not None else None
         loser_new = (loser_bal - stake) if loser_bal is not None else None
@@ -298,6 +424,11 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             "table_id": table_id,
             "winner_display": winner_display,
             "loser_display": loser_display,
+            "auto_mode": auto_mode,
+            "winner_key": winner_key,
+            "loser_key": loser_key,
+            "winner_new": winner_new,
+            "loser_new": loser_new,
         }
 
         winner_line = f"{winner_bal_str} → {winner_new}" if winner_new is not None else f"{winner_bal_str} (manual check needed)"
@@ -340,6 +471,15 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         if action == "winreject":
             await query.edit_message_text(f"❌ Win report rejected:\n{report['winner_display']} vs {report['loser_display']}")
+        elif report.get("auto_mode") and report.get("winner_key") and report.get("loser_key"):
+            bot_chart["balances"][report["winner_key"]] = report["winner_new"]
+            bot_chart["balances"][report["loser_key"]] = report["loser_new"]
+            await refresh_chart_message(context)
+            await query.edit_message_text(
+                f"✅ Confirmed. Chart automatically update ho gaya:\n"
+                f"{report['winner_display']}: {report['winner_new']}\n"
+                f"{report['loser_display']}: {report['loser_new']}"
+            )
         else:
             await query.edit_message_text(
                 f"✅ Confirmed. Ab chart mein manually update kar do:\n"
@@ -391,6 +531,8 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
+    app.add_handler(CommandHandler("initchart", cmd_initchart))
+    app.add_handler(CommandHandler("setbalance", cmd_setbalance))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message))
     app.add_handler(CallbackQueryHandler(handle_admin_button))
 
