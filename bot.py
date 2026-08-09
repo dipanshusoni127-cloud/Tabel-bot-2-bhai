@@ -84,6 +84,18 @@ def extract_stake_amount(text: str) -> int:
     return 0
 
 
+def normalize_table_text(text: str) -> str:
+    """Fix common typos ('ful' -> 'full') and append 'Go' to the final posted table text.
+    e.g. '1k ful' -> '1k full Go', '4k ful no iphone' -> '4k full no iphone Go'
+    """
+    text = text or ""
+    fixed = re.sub(r"\bfu?ll?\b", "full", text, flags=re.IGNORECASE)
+    fixed = fixed.strip()
+    if not re.search(r"\bgo\b$", fixed, re.IGNORECASE):
+        fixed = f"{fixed} Go"
+    return fixed
+
+
 def parse_amount(balance_str: str):
     """Extract the first integer (with optional sign) from a balance string like '+900', '-250', '5000+4750'."""
     if not balance_str or balance_str == "Not found":
@@ -330,7 +342,7 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # action == confirm
     table_text = (
-        f"{request['text']}\n"
+        f"{normalize_table_text(request['text'])}\n"
         "\n"
         f"{request['poster_display']}\n"
         "🆚\n"
