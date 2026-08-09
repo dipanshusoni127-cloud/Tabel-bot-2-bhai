@@ -101,7 +101,9 @@ async def refresh_chart_message(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_initchart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"/initchart received from user_id={update.effective_user.id} (ADMIN_ID={ADMIN_ID})")
     if update.effective_user.id != ADMIN_ID:
+        logger.warning("Ignored /initchart: sender is not ADMIN_ID")
         return
     chat_id = update.effective_chat.id
     source_text = None
@@ -528,9 +530,16 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     pending_requests.pop(orig_id, None)
 
 
+async def debug_log_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if msg:
+        logger.info(f"RAW MESSAGE seen: chat_id={update.effective_chat.id} user_id={msg.from_user.id if msg.from_user else None} text={msg.text!r}")
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
+    app.add_handler(MessageHandler(filters.ALL, debug_log_all), group=-1)
     app.add_handler(CommandHandler("initchart", cmd_initchart))
     app.add_handler(CommandHandler("setbalance", cmd_setbalance))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message))
