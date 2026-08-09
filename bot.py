@@ -62,11 +62,19 @@ def parse_balance_lines(text: str):
 
 
 def format_chart_text() -> str:
-    lines = ["💰 BALANCE CHART (auto-updated)", ""]
+    lines = ["💝 2 BHAI 💝 LUDO 💝 KING 💝", "━━━━━━━━━━━━━━"]
+    grouped = {}
     for key in sorted(bot_chart["balances"].keys()):
         disp = bot_chart["display"].get(key, key.title())
-        val = bot_chart["balances"][key]
-        lines.append(f"{disp} = {val}")
+        first_letter = disp[0].upper() if disp else "#"
+        grouped.setdefault(first_letter, []).append((disp, bot_chart["balances"][key]))
+    for letter in sorted(grouped.keys()):
+        lines.append(f"🎲 {letter}")
+        for disp, val in grouped[letter]:
+            lines.append(f"❤️ {disp} = {val}")
+        lines.append("━━━━━━━━━━━━━━")
+    lines.append("💰 MINIMUM BET: ₹500")
+    lines.append("❤️ 2 BHAI LUDO KING ❤️")
     return "\n".join(lines)
 
 
