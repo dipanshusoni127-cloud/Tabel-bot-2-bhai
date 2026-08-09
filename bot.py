@@ -36,7 +36,7 @@ GROUP_ID = int(GROUP_ID) if GROUP_ID else None
 JOIN_WORDS = {"lga", "lgao", "l", "aao", "ll", "t", "aaja", "aja"}
 
 # Words used to report a win by replying to the confirmed table message
-WIN_WORDS = {"win", "won", "jeeta", "jeet", "jit", "w"}
+WIN_WORDS = {"win", "won", "jeeta", "jeet", "jit", "w", "ww", "www", "wwww", "wwwww", "winn", "winnn"}
 
 COMMISSION_PERCENT = 5
 
