@@ -188,6 +188,16 @@ active_tables = {}
 # Tracks pending win reports awaiting admin confirmation: {report_key: {...}}
 pending_win_reports = {}
 
+# Remembers every user seen in the group so we can resolve @username -> real ID
+# without depending on Telegram's get_chat-by-username (which can fail with
+# "Chat not found" for users who've never DM'd the bot)
+known_users = {}  # username_lower -> {"id": ..., "first_name": ...}
+
+
+def remember_user(user):
+    if user and user.username:
+        known_users[user.username.lower()] = {"id": user.id, "first_name": user.first_name}
+
 
 async def cmd_removebalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -227,12 +237,31 @@ async def cmd_addtable(update: Update, context: ContextTypes.DEFAULT_TYPE):
     joiner_username = tokens[1].lstrip("@")
     stake_text = " ".join(tokens[2:])
 
+    def resolve(uname):
+        if uname.lower() in known_users:
+            c = known_users[uname.lower()]
+            return c["id"], uname, c["first_name"]
+        return None
+
+    poster_info = resolve(poster_username)
+    joiner_info = resolve(joiner_username)
+
     try:
-        poster_chat = await context.bot.get_chat(f"@{poster_username}")
-        joiner_chat = await context.bot.get_chat(f"@{joiner_username}")
+        if poster_info is None:
+            chat = await context.bot.get_chat(f"@{poster_username}")
+            poster_info = (chat.id, chat.username, chat.first_name)
+        if joiner_info is None:
+            chat = await context.bot.get_chat(f"@{joiner_username}")
+            joiner_info = (chat.id, chat.username, chat.first_name)
     except Exception as e:
-        await update.message.reply_text(f"Username resolve nahi hua: {e}\nUsername sahi hai check kar lo.")
+        await update.message.reply_text(
+            f"Username resolve nahi hua: {e}\n"
+            "(Tip: is player ko group mein ek baar kuch bhi type karne bolo, phir bot use yaad rakh lega.)"
+        )
         return
+
+    poster_id, poster_uname, poster_fname = poster_info
+    joiner_id, joiner_uname, joiner_fname = joiner_info
 
     chat_id = update.effective_chat.id
     table_msg_id = update.message.reply_to_message.message_id
@@ -240,14 +269,14 @@ async def cmd_addtable(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_tables[table_msg_id] = {
         "stake_text": stake_text,
         "chat_id": chat_id,
-        "poster_id": poster_chat.id,
-        "poster_name": poster_chat.first_name,
-        "poster_username": poster_chat.username,
-        "poster_display": f"@{poster_chat.username}" if poster_chat.username else poster_chat.first_name,
-        "joiner_id": joiner_chat.id,
-        "joiner_name": joiner_chat.first_name,
-        "joiner_username": joiner_chat.username,
-        "joiner_display": f"@{joiner_chat.username}" if joiner_chat.username else joiner_chat.first_name,
+        "poster_id": poster_id,
+        "poster_name": poster_fname,
+        "poster_username": poster_uname,
+        "poster_display": f"@{poster_uname}" if poster_uname else poster_fname,
+        "joiner_id": joiner_id,
+        "joiner_name": joiner_fname,
+        "joiner_username": joiner_uname,
+        "joiner_display": f"@{joiner_uname}" if joiner_uname else joiner_fname,
     }
     await update.message.reply_text("✅ Table register ho gayi. Ab is message pe 'win' reply karega tab tracking chalegi.")
 
@@ -428,12 +457,15 @@ async def extract_and_register_table(context, message, chat_id: int):
     for uid, uname, fname in mentioned[:2]:
         if uid is not None:
             resolved.append((uid, uname, fname))
+        elif uname and uname.lower() in known_users:
+            cached = known_users[uname.lower()]
+            resolved.append((cached["id"], uname, cached["first_name"]))
         else:
             try:
                 chat = await context.bot.get_chat(f"@{uname}")
                 resolved.append((chat.id, chat.username, chat.first_name))
             except Exception as e:
-                return f"@{uname} resolve nahi hua: {e}"
+                return f"@{uname} resolve nahi hua: {e}\n(Tip: is player ko group mein ek baar kuch bhi type karne bolo, phir bot use yaad rakh lega aur register kaam karega.)"
 
     (poster_id, poster_username, poster_fname), (joiner_id, joiner_username, joiner_fname) = resolved
     poster_display = f"@{poster_username}" if poster_username else poster_fname
@@ -764,6 +796,10 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def debug_log_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if msg:
+        remember_user(msg.from_user)
+        for entity in (msg.entities or []):
+            if entity.type == "text_mention" and entity.user:
+                remember_user(entity.user)
         logger.info(f"RAW MESSAGE seen: chat_id={update.effective_chat.id} user_id={msg.from_user.id if msg.from_user else None} text={msg.text!r}")
 
 
