@@ -416,13 +416,20 @@ async def delayed_delete(bot, chat_id: int, message_id: int, delay_seconds: int)
         logger.warning(f"Could not delete Rose message {message_id}: {e}")
 
 
+ROSE_BOT_ID = 609517172  # Rose's actual Telegram user ID
+
+
 def is_rose_message(msg) -> bool:
     user = msg.from_user
-    if not user or not user.is_bot:
+    if not user:
+        return False
+    if user.id == ROSE_BOT_ID:
+        return True
+    if not user.is_bot:
         return False
     uname = (user.username or "").lower()
     fname = (user.first_name or "").lower()
-    return "rose" in uname or fname == "rose"
+    return "rose" in uname or "rose" in fname
 
 
 ROSE_AUTO_DELETE_SECONDS = 60  # 1 minute
