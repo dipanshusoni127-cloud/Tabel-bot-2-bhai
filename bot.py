@@ -13,6 +13,7 @@ You (admin) still handle balance checks manually before hitting Confirm.
 
 import os
 import re
+import asyncio
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -37,7 +38,10 @@ GROUP_ID = int(GROUP_ID) if GROUP_ID else None
 JOIN_WORDS = {"lga", "lgao", "l", "aao", "ll", "t", "aaja", "aja"}
 
 # Words used to report a win by replying to the confirmed table message
-WIN_WORDS = {"win", "won", "jeeta", "jeet", "jit", "w", "ww", "www", "wwww", "wwwww", "winn", "winnn"}
+WIN_WORDS = {
+    "win", "won", "jeeta", "jeet", "jit", "w", "ww", "www", "wwww", "wwwww", "winn", "winnn",
+    "win update", "winupdate", "update win", "win updated", "match win", "win match"
+}
 
 COMMISSION_PERCENT = 5
 
@@ -375,31 +379,126 @@ async def get_pinned_balances(context: ContextTypes.DEFAULT_TYPE, chat_id: int) 
     return {}
 
 
+async def delayed_delete(bot, chat_id: int, message_id: int, delay_seconds: int):
+    await asyncio.sleep(delay_seconds)
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logger.warning(f"Could not delete Rose message {message_id}: {e}")
+
+
+def is_rose_message(msg) -> bool:
+    user = msg.from_user
+    if not user or not user.is_bot:
+        return False
+    uname = (user.username or "").lower()
+    fname = (user.first_name or "").lower()
+    return "rose" in uname or fname == "rose"
+
+
+ROSE_AUTO_DELETE_SECONDS = 180  # 3 minutes
+
+
+CANCEL_WORDS = {"cancel", "delete", "remove"}
+
+
+def is_cancel_word(text: str) -> bool:
+    cleaned = (text or "").strip().lower()
+    return cleaned in CANCEL_WORDS
+
+
+async def extract_and_register_table(context, message, chat_id: int):
+    """Given a message with 2 tagged players and a stake, resolve them and register
+    into active_tables. Returns a status string to send back to admin (success or error),
+    or None if fewer than 2 tagged players were found."""
+    source_text = message.text or ""
+    mentioned = []  # list of (id_or_None, username_or_None, first_name_or_None)
+    parsed_entities = message.parse_entities(types=["text_mention", "mention"])
+    for entity, text in parsed_entities.items():
+        if entity.type == "text_mention" and entity.user:
+            mentioned.append((entity.user.id, entity.user.username, entity.user.first_name))
+        elif entity.type == "mention":
+            uname = text.lstrip("@")
+            mentioned.append((None, uname, None))
+
+    if len(mentioned) < 2:
+        return None  # not enough tags — caller decides what to do
+
+    resolved = []
+    for uid, uname, fname in mentioned[:2]:
+        if uid is not None:
+            resolved.append((uid, uname, fname))
+        else:
+            try:
+                chat = await context.bot.get_chat(f"@{uname}")
+                resolved.append((chat.id, chat.username, chat.first_name))
+            except Exception as e:
+                return f"@{uname} resolve nahi hua: {e}"
+
+    (poster_id, poster_username, poster_fname), (joiner_id, joiner_username, joiner_fname) = resolved
+    poster_display = f"@{poster_username}" if poster_username else poster_fname
+    joiner_display = f"@{joiner_username}" if joiner_username else joiner_fname
+
+    stake_text = source_text
+    for entity, text in parsed_entities.items():
+        stake_text = stake_text.replace(text, "")
+    stake_text = re.sub(r"\s+", " ", stake_text).strip() or source_text.strip()
+
+    active_tables[message.message_id] = {
+        "stake_text": stake_text,
+        "chat_id": chat_id,
+        "poster_id": poster_id,
+        "poster_name": poster_fname,
+        "poster_username": poster_username,
+        "poster_display": poster_display,
+        "joiner_id": joiner_id,
+        "joiner_name": joiner_fname,
+        "joiner_username": joiner_username,
+        "joiner_display": joiner_display,
+    }
+    return f"✅ Table register ho gayi:\n{stake_text}\n{poster_display} 🆚 {joiner_display}"
+
+
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not msg.text:
+    if not msg:
         return
 
     chat_id = update.effective_chat.id
     if GROUP_ID is not None and chat_id != GROUP_ID:
         return
 
+    # Auto-delete Rose's messages after a delay (our bot has delete rights in the group)
+    if is_rose_message(msg):
+        asyncio.create_task(delayed_delete(context.bot, chat_id, msg.message_id, ROSE_AUTO_DELETE_SECONDS))
+        return
+
+    if not msg.text:
+        return
+
+    # Case -1: admin replies "cancel" to a wrongly-registered/posted table message —
+    # removes it from bot's memory (Telegram doesn't notify bots of message deletions,
+    # so admin should cancel here BEFORE deleting the actual message)
+    if msg.reply_to_message and is_cancel_word(msg.text) and msg.from_user.id == ADMIN_ID:
+        target_id = msg.reply_to_message.message_id
+        removed = False
+        if target_id in active_tables:
+            del active_tables[target_id]
+            removed = True
+        if target_id in pending_requests:
+            del pending_requests[target_id]
+            removed = True
+        if removed:
+            await context.bot.send_message(chat_id=ADMIN_ID, text="✅ Table bot ki memory se cancel kar di. Ab message delete kar sakte ho.")
+        else:
+            await context.bot.send_message(chat_id=ADMIN_ID, text="Ye message bot ki memory mein tracked nahi tha.")
+        return
+
     # Case 0: admin replies "register" to a manually-posted table message —
     # bot auto-extracts poster/joiner from tagged mentions in that message
     if msg.reply_to_message and is_register_word(msg.text) and msg.from_user.id == ADMIN_ID:
-        source = msg.reply_to_message
-        source_text = source.text or ""
-
-        mentioned = []  # list of (id_or_None, username_or_None, first_name_or_None)
-        parsed_entities = source.parse_entities(types=["text_mention", "mention"])
-        for entity, text in parsed_entities.items():
-            if entity.type == "text_mention" and entity.user:
-                mentioned.append((entity.user.id, entity.user.username, entity.user.first_name))
-            elif entity.type == "mention":
-                uname = text.lstrip("@")
-                mentioned.append((None, uname, None))
-
-        if len(mentioned) < 2:
+        result = await extract_and_register_table(context, msg.reply_to_message, chat_id)
+        if result is None:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
@@ -408,48 +507,20 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     "/addtable @poster @joiner 5k full"
                 )
             )
-            return
-
-        resolved = []
-        for uid, uname, fname in mentioned[:2]:
-            if uid is not None:
-                resolved.append((uid, uname, fname))
-            else:
-                try:
-                    chat = await context.bot.get_chat(f"@{uname}")
-                    resolved.append((chat.id, chat.username, chat.first_name))
-                except Exception as e:
-                    await context.bot.send_message(chat_id=ADMIN_ID, text=f"@{uname} resolve nahi hua: {e}")
-                    return
-
-        (poster_id, poster_username, poster_fname), (joiner_id, joiner_username, joiner_fname) = resolved
-        poster_display = f"@{poster_username}" if poster_username else poster_fname
-        joiner_display = f"@{joiner_username}" if joiner_username else joiner_fname
-
-        stake_text = source_text
-        for entity, text in parsed_entities.items():
-            stake_text = stake_text.replace(text, "")
-        stake_text = re.sub(r"\s+", " ", stake_text).strip() or source_text.strip()
-
-        active_tables[source.message_id] = {
-            "stake_text": stake_text,
-            "chat_id": chat_id,
-            "poster_id": poster_id,
-            "poster_name": poster_fname,
-            "poster_username": poster_username,
-            "poster_display": poster_display,
-            "joiner_id": joiner_id,
-            "joiner_name": joiner_fname,
-            "joiner_username": joiner_username,
-            "joiner_display": joiner_display,
-        }
-        await context.bot.send_message(chat_id=ADMIN_ID, text=f"✅ Table register ho gayi:\n{stake_text}\n{poster_display} 🆚 {joiner_display}")
+        else:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=result)
         return
 
     # Case 1: someone posting a table request like "10k full +500 no iphone"
-    # (admin's own messages / anonymous-admin posts are ignored — those are usually
-    # instructions/announcements, not real player stake requests)
+    # (admin's own messages / anonymous-admin posts are ignored for the pending_requests
+    # flow — but if the admin posts a table WITH 2 tagged players already, auto-register it)
     is_admin_sender = msg.from_user.id == ADMIN_ID or (msg.from_user.username == "GroupAnonymousBot")
+    if is_table_request(msg.text) and is_admin_sender:
+        result = await extract_and_register_table(context, msg, chat_id)
+        if result is not None:
+            await context.bot.send_message(chat_id=ADMIN_ID, text=result)
+        return  # admin messages are never tracked as pending_requests either way
+
     if is_table_request(msg.text) and not is_admin_sender:
         pending_requests[msg.message_id] = {
             "text": msg.text,
