@@ -425,7 +425,7 @@ def is_rose_message(msg) -> bool:
     return "rose" in uname or fname == "rose"
 
 
-ROSE_AUTO_DELETE_SECONDS = 180  # 3 minutes
+ROSE_AUTO_DELETE_SECONDS = 60  # 1 minute
 
 
 CANCEL_WORDS = {"cancel", "delete", "remove"}
@@ -564,7 +564,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # Case 2: someone joining a table — either by replying to it, or by sending
-    # a plain join-word message (bot matches it to the latest unclaimed table request)
+    # a plain join-word message (only auto-matched if exactly ONE table is pending,
+    # to avoid confusing it with a different, unrelated table)
     if is_join_word(msg.text):
         orig_id = None
         if msg.reply_to_message:
@@ -572,14 +573,16 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if orig_id not in pending_requests:
                 orig_id = None
         if orig_id is None:
-            # No reply, or reply wasn't a tracked table — fall back to the latest
-            # unclaimed table request in this chat
+            # No reply, or reply wasn't a tracked table — only auto-match if there's
+            # exactly ONE unclaimed table pending in this chat (no ambiguity)
             candidates = [
                 mid for mid, req in pending_requests.items()
                 if req["chat_id"] == chat_id and "joiner_id" not in req
             ]
-            if candidates:
-                orig_id = max(candidates)
+            if len(candidates) == 1:
+                orig_id = candidates[0]
+            else:
+                return  # zero or multiple pending tables — can't safely guess, ignore
 
         if orig_id is None:
             return  # no table request to join
@@ -589,6 +592,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             return  # not a tracked table request, or already joined
 
         joiner_id = msg.from_user.id
+        if joiner_id == request["poster_id"]:
+            return  # poster can't join their own table
+
         joiner_name = msg.from_user.first_name
         joiner_username = msg.from_user.username
 
