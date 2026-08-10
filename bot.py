@@ -447,7 +447,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # Case 1: someone posting a table request like "10k full +500 no iphone"
-    if is_table_request(msg.text):
+    # (admin's own messages / anonymous-admin posts are ignored — those are usually
+    # instructions/announcements, not real player stake requests)
+    is_admin_sender = msg.from_user.id == ADMIN_ID or (msg.from_user.username == "GroupAnonymousBot")
+    if is_table_request(msg.text) and not is_admin_sender:
         pending_requests[msg.message_id] = {
             "text": msg.text,
             "poster_id": msg.from_user.id,
