@@ -802,7 +802,9 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         "joiner_display": request["joiner_display"],
     }
 
-    await query.edit_message_text(f"✅ Confirmed & posted:\n{request['text']}")
+    await query.edit_message_text(
+        f"✅ Confirmed & posted:\n{request['text']}\n{request['poster_display']} 🆚 {request['joiner_display']}"
+    )
     pending_requests.pop(orig_id, None)
 
 
