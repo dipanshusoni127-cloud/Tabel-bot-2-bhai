@@ -411,11 +411,34 @@ def extract_stake_amount(text: str) -> int:
 
 
 def normalize_table_text(text: str) -> str:
-    """Fix common typos ('ful' -> 'full', 'noip'/'ipn'/'iphon'/etc -> 'no iphone')
-    and insert 'Go' right after 'full' in the final posted table text.
+    """Fix common typos ('ful' -> 'full', 'noip'/'ipn'/'iphon'/etc -> 'no iphone',
+    snake spelling mistakes -> 'snake') and insert 'Go' right after 'full' in the
+    final posted table text.
     e.g. '1k ful' -> '1k full Go', '4k ful noip' -> '4k full Go no iphone'
+         '1k snake' / '1k snak go' / '1k full snake' -> '1k snake full Go 🐍'
     """
     text = text or ""
+
+    # Snake game — typo-tolerant detection (snake, snak, snek, sneak, snke, saanke...)
+    snake_pattern = re.compile(r"\b(snake|snak|snek|sneak|snke|saanke)\b", re.IGNORECASE)
+    if snake_pattern.search(text):
+        # Pull out the stake amount (e.g. "1k", "500")
+        num_match = re.search(r"\d+\s*k?", text, re.IGNORECASE)
+        stake_part = num_match.group(0).strip() if num_match else ""
+
+        # Strip out the number, snake word, full/ful, and go — keep any remaining
+        # extras (like "+500", "no iphone") to append at the end
+        remainder = text
+        if num_match:
+            remainder = remainder.replace(num_match.group(0), "", 1)
+        remainder = snake_pattern.sub("", remainder)
+        remainder = re.sub(r"\bfu?ll?\b", "", remainder, flags=re.IGNORECASE)
+        remainder = re.sub(r"\bgo\b", "", remainder, flags=re.IGNORECASE)
+        remainder = re.sub(r"\s+", " ", remainder).strip()
+
+        parts = [p for p in [stake_part, "snake full Go", remainder] if p]
+        return " ".join(parts) + " 🐍"
+
     fixed = re.sub(r"\bfu?ll?\b", "full", text, flags=re.IGNORECASE)
 
     # Normalize "no iphone" spelling variants to a single consistent phrase
