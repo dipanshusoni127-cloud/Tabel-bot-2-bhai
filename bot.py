@@ -66,7 +66,15 @@ def parse_balance_lines(text: str):
 
 
 def format_chart_text() -> str:
-    lines = ["💝 2 BHAI 💝 LUDO 💝 KING 💝", "━━━━━━━━━━━━━━"]
+    lines = [
+        "💝 2 BHAI 💝 LUDO 💝 KING 💝",
+        "⚫️3 SS COMPULSORY ❤️⚫️",
+        "1️⃣ CODE 👈 CHAT 💝 SS 👈",
+        "2️⃣ DICE USE SS",
+        "3️⃣ WIN SS 🇮🇳",
+        "🙏 RULES 👉@TWOBHAI_RULES🙏",
+        "━━━━━━━━━━━━━━",
+    ]
     grouped = {}
     for key in sorted(bot_chart["balances"].keys()):
         disp = bot_chart["display"].get(key, key.title())
@@ -77,7 +85,7 @@ def format_chart_text() -> str:
         for disp, val in grouped[letter]:
             lines.append(f"❤️ {disp} = {val}")
         lines.append("━━━━━━━━━━━━━━")
-    lines.append("💰 MINIMUM BET: ₹500")
+    lines.append("💰 MINIMUM BET: ₹200")
     lines.append("❤️ 2 BHAI LUDO KING ❤️")
     return "\n".join(lines)
 
@@ -171,7 +179,7 @@ async def cmd_setbalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Pattern to detect a table-request message: a number (e.g. 2k, 1k, 500, 700)
 # followed by the word "full"/"ful" (typo-tolerant) or "ludo", e.g. "2k full", "1k ful", "5k ludo"
-TABLE_REQUEST_PATTERN = re.compile(r"\d+\s*k?\s*(fu?ll?|ludo)", re.IGNORECASE)
+TABLE_REQUEST_PATTERN = re.compile(r"\d+\s*k?\s*(fu?ll?|ludo|snake)", re.IGNORECASE)
 
 
 def is_table_request(text: str) -> bool:
@@ -293,6 +301,82 @@ def is_register_word(text: str) -> bool:
     return cleaned in REGISTER_WORDS
 
 
+BOLD_MAP = {}
+for i, c in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+    BOLD_MAP[c] = chr(0x1D400 + i)
+for i, c in enumerate("abcdefghijklmnopqrstuvwxyz"):
+    BOLD_MAP[c] = chr(0x1D41A + i)
+for i, c in enumerate("0123456789"):
+    BOLD_MAP[c] = chr(0x1D7CE + i)
+
+
+def bold_unicode(text: str) -> str:
+    return "".join(BOLD_MAP.get(ch, ch) for ch in (text or ""))
+
+
+import random
+
+
+def build_table_text(stake_text: str, poster_mention: str, joiner_mention: str) -> str:
+    stake_bold = bold_unicode(stake_text)
+    designs = [
+        # Design 1 — Match/Sword
+        (
+            f"⚔️ {bold_unicode('MATCH')} ⚔️\n"
+            f"{stake_bold}\n"
+            "\n"
+            f"{poster_mention}\n"
+            f"{bold_unicode('VS')}\n"
+            f"{joiner_mention}\n"
+            "\n"
+            f"👑 {bold_unicode('2 BHAI LUDO KING')} 👑"
+        ),
+        # Design 2 — Minimal squares
+        (
+            "▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️\n"
+            f"{stake_bold}\n"
+            "▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️\n"
+            "\n"
+            f"{poster_mention}  ⚡  {joiner_mention}\n"
+            "\n"
+            "▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️\n"
+            f"{bold_unicode('2 BHAI LUDO KING')}\n"
+            "▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️▪️"
+        ),
+        # Design 3 — Bold header line
+        (
+            f"{bold_unicode('2 BHAI LUDO KING')}\n"
+            "──────────────\n"
+            f"🎮 {stake_bold}\n"
+            "\n"
+            f"{poster_mention} 🆚 {joiner_mention}\n"
+            "──────────────"
+        ),
+        # Design 4 — Bracket/Tournament style
+        (
+            f"【 {stake_bold} 】\n"
+            "\n"
+            f"     {poster_mention}\n"
+            "        ⚡\n"
+            f"     {joiner_mention}\n"
+            "\n"
+            f"【 {bold_unicode('2 BHAI LUDO KING')} 】"
+        ),
+        # Design 5 — Coin Flip vibe
+        (
+            f"🪙 {bold_unicode('TABLE OPEN')} 🪙\n"
+            f"{stake_bold}\n"
+            "\n"
+            f"{poster_mention}\n"
+            "🎯\n"
+            f"{joiner_mention}\n"
+            "\n"
+            f"{bold_unicode('2 BHAI LUDO KING')} 🏆"
+        ),
+    ]
+    return random.choice(designs)
+
+
 def mention_html(user_id: int, display_name: str) -> str:
     """Build a clickable ID-based mention that works even if the user has no @username."""
     safe_name = (display_name or "player").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -327,14 +411,27 @@ def extract_stake_amount(text: str) -> int:
 
 
 def normalize_table_text(text: str) -> str:
-    """Fix common typos ('ful' -> 'full') and append 'Go' to the final posted table text.
-    e.g. '1k ful' -> '1k full Go', '4k ful no iphone' -> '4k full no iphone Go'
+    """Fix common typos ('ful' -> 'full', 'noip'/'ipn'/'iphon'/etc -> 'no iphone')
+    and insert 'Go' right after 'full' in the final posted table text.
+    e.g. '1k ful' -> '1k full Go', '4k ful noip' -> '4k full Go no iphone'
     """
     text = text or ""
     fixed = re.sub(r"\bfu?ll?\b", "full", text, flags=re.IGNORECASE)
+
+    # Normalize "no iphone" spelling variants to a single consistent phrase
+    iphone_variant_pattern = re.compile(
+        r"\b(no\s*ip(?:h(?:o(?:ne?)?)?)?n?|n\s*iphn|iphon|ipn|niphn|nipn)\b",
+        re.IGNORECASE
+    )
+    fixed = iphone_variant_pattern.sub("no iphone", fixed)
     fixed = fixed.strip()
-    if not re.search(r"\bgo\b$", fixed, re.IGNORECASE):
-        fixed = f"{fixed} Go"
+
+    # Remove any existing standalone "Go" (so we don't duplicate it), then
+    # insert "Go" right after the first "full"
+    fixed = re.sub(r"\bgo\b", "", fixed, flags=re.IGNORECASE)
+    fixed = re.sub(r"\s+", " ", fixed).strip()
+    fixed = re.sub(r"\bfull\b", "full Go", fixed, count=1, flags=re.IGNORECASE)
+
     return fixed
 
 
@@ -503,7 +600,17 @@ async def extract_and_register_table(context, message, chat_id: int):
         stake_text = stake_text.replace(text, "")
     stake_text = re.sub(r"\s+", " ", stake_text).strip() or source_text.strip()
 
-    active_tables[message.message_id] = {
+    poster_mention = mention_html(poster_id, poster_display.lstrip("@"))
+    joiner_mention = mention_html(joiner_id, joiner_display.lstrip("@"))
+    fancy_text = build_table_text(normalize_table_text(stake_text), poster_mention, joiner_mention)
+    sent_msg = await context.bot.send_message(chat_id=chat_id, text=fancy_text, parse_mode="HTML")
+
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+    except Exception as e:
+        logger.warning(f"Could not delete original manual table message: {e}")
+
+    active_tables[sent_msg.message_id] = {
         "stake_text": stake_text,
         "chat_id": chat_id,
         "poster_id": poster_id,
@@ -515,7 +622,7 @@ async def extract_and_register_table(context, message, chat_id: int):
         "joiner_username": joiner_username,
         "joiner_display": joiner_display,
     }
-    return f"✅ Table register ho gayi:\n{stake_text}\n{poster_display} 🆚 {joiner_display}"
+    return f"✅ Table register ho gayi (fancy design se post ki):\n{stake_text}\n{poster_display} 🆚 {joiner_display}"
 
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -801,13 +908,7 @@ async def handle_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     # action == confirm
     poster_mention = mention_html(request["poster_id"], request["poster_display"].lstrip("@"))
     joiner_mention = mention_html(request["joiner_id"], request["joiner_display"].lstrip("@"))
-    table_text = (
-        f"{normalize_table_text(request['text'])}\n"
-        "\n"
-        f"{poster_mention}\n"
-        "🆚\n"
-        f"{joiner_mention}"
-    )
+    table_text = build_table_text(normalize_table_text(request['text']), poster_mention, joiner_mention)
     sent_msg = await context.bot.send_message(chat_id=request["chat_id"], text=table_text, parse_mode="HTML")
 
     active_tables[sent_msg.message_id] = {
