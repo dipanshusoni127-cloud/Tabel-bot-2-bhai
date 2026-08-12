@@ -263,6 +263,10 @@ async def cmd_addtable(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poster_id, poster_uname, poster_fname = poster_info
     joiner_id, joiner_uname, joiner_fname = joiner_info
 
+    if poster_id == ADMIN_ID or joiner_id == ADMIN_ID:
+        await update.message.reply_text("❌ Admin ko player ki tarah tag kiya gaya hai — ye table register nahi hogi.")
+        return
+
     chat_id = update.effective_chat.id
     table_msg_id = update.message.reply_to_message.message_id
 
@@ -408,10 +412,22 @@ async def get_pinned_balances(context: ContextTypes.DEFAULT_TYPE, chat_id: int) 
     return {}
 
 
+_background_tasks = set()
+
+
+def schedule_background(coro):
+    """Create a background task while keeping a reference so it isn't garbage-collected early."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 async def delayed_delete(bot, chat_id: int, message_id: int, delay_seconds: int):
     await asyncio.sleep(delay_seconds)
     try:
         await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        logger.info(f"Deleted Rose message {message_id} in chat {chat_id}")
     except Exception as e:
         logger.warning(f"Could not delete Rose message {message_id}: {e}")
 
@@ -475,6 +491,10 @@ async def extract_and_register_table(context, message, chat_id: int):
                 return f"@{uname} resolve nahi hua: {e}\n(Tip: is player ko group mein ek baar kuch bhi type karne bolo, phir bot use yaad rakh lega aur register kaam karega.)"
 
     (poster_id, poster_username, poster_fname), (joiner_id, joiner_username, joiner_fname) = resolved
+
+    if poster_id == ADMIN_ID or joiner_id == ADMIN_ID:
+        return "❌ Admin ko player ki tarah tag kiya gaya hai — ye table register nahi hogi. Sahi 2 players tag karke dobara try karo."
+
     poster_display = f"@{poster_username}" if poster_username else poster_fname
     joiner_display = f"@{joiner_username}" if joiner_username else joiner_fname
 
@@ -509,7 +529,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Auto-delete Rose's messages after a delay (our bot has delete rights in the group)
     if is_rose_message(msg):
-        asyncio.create_task(delayed_delete(context.bot, chat_id, msg.message_id, ROSE_AUTO_DELETE_SECONDS))
+        logger.info(f"Rose message detected (id={msg.message_id}), scheduling delete in {ROSE_AUTO_DELETE_SECONDS}s")
+        schedule_background(delayed_delete(context.bot, chat_id, msg.message_id, ROSE_AUTO_DELETE_SECONDS))
         return
 
     if not msg.text:
@@ -599,8 +620,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             return  # not a tracked table request, or already joined
 
         joiner_id = msg.from_user.id
-        if joiner_id == request["poster_id"]:
-            return  # poster can't join their own table
+        if joiner_id == request["poster_id"] or joiner_id == ADMIN_ID:
+            return  # poster can't join their own table; admin isn't a player
 
         joiner_name = msg.from_user.first_name
         joiner_username = msg.from_user.username
